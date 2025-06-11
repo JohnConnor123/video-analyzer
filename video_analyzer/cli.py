@@ -70,7 +70,8 @@ def main():
     parser.add_argument("--model", type=str, help="Name of the vision model to use")
     parser.add_argument("--duration", type=float, help="Duration in seconds to process")
     parser.add_argument("--keep-frames", action="store_true", help="Keep extracted frames after analysis")
-    parser.add_argument("--whisper-model", type=str, help="Whisper model size (tiny, base, small, medium, large), or path to local Whisper model snapshot")
+    parser.add_argument("--whisper-api-url", type=str, help="URL for Whisper API service (e.g., http://localhost:16000)")
+    parser.add_argument("--whisper-timeout", type=int, help="Timeout for Whisper API requests in seconds")
     parser.add_argument("--start-stage", type=int, default=1, help="Stage to start processing from (1-3)")
     parser.add_argument("--max-frames", type=int, default=sys.maxsize, help="Maximum number of frames to process")
     parser.add_argument("--log-level", type=str, default="INFO", 
@@ -79,7 +80,6 @@ def main():
     parser.add_argument("--prompt", type=str, default="",
                         help="Question to ask about the video")
     parser.add_argument("--language", type=str, default=None)
-    parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--temperature", type=float, help="Temperature for LLM generation")
     args = parser.parse_args()
 
@@ -115,12 +115,14 @@ def main():
         if args.start_stage <= 1:
             # Initialize audio processor and extract transcript, the AudioProcessor accept following parameters that can be set in config.json:
             # language (str): Language code for audio transcription (default: None)
-            # whisper_model (str): Whisper model size or path (default: "medium")
-            # device (str): Device to use for audio processing (default: "cpu")
+            # whisper_api_url (str): URL for Whisper API service (default: "http://localhost:16000")
+            # timeout (int): Timeout for Whisper API requests in seconds (default: 300)
             logger.debug("Initializing audio processing...")
-            audio_processor = AudioProcessor(language=config.get("audio", {}).get("language", ""), 
-                                             model_size_or_path=config.get("audio", {}).get("whisper_model", "medium"),
-                                             device=config.get("audio", {}).get("device", "cpu"))
+            audio_processor = AudioProcessor(
+                language=config.get("audio", {}).get("language", ""), 
+                whisper_api_url=config.get("audio", {}).get("whisper_api_url", "http://localhost:16000"),
+                timeout=config.get("audio", {}).get("timeout", 300)
+            )
             
             logger.info("Extracting audio from video...")
             try:
@@ -177,7 +179,7 @@ def main():
             "metadata": {
                 "client": config.get("clients", {}).get("default"),
                 "model": model,
-                "whisper_model": config.get("audio", {}).get("whisper_model"),
+                "whisper_api_url": config.get("audio", {}).get("whisper_api_url"),
                 "frames_per_minute": config.get("frames", {}).get("per_minute"),
                 "duration_processed": config.get("duration"),
                 "frames_extracted": len(frames),

@@ -3,7 +3,13 @@ from pathlib import Path
 import json
 from typing import Any
 import logging
-import pkg_resources
+
+try:
+    # Python 3.9+
+    from importlib.resources import files
+except ImportError:
+    # Python 3.8
+    from importlib_resources import files
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +18,7 @@ class Config:
         # Handle user-provided config directory
         self.config_dir = Path(config_dir)
         self.user_config = self.config_dir / "config.json"
+        self._default_config_content = None
         
         # First try to find default_config.json in the user-provided directory
         self.default_config = self.config_dir / "default_config.json"
@@ -19,9 +26,11 @@ class Config:
         # If not found, fallback to package's default config
         if not self.default_config.exists():
             try:
-                default_config_path = pkg_resources.resource_filename('video_analyzer', 'config/default_config.json')
-                self.default_config = Path(default_config_path)
-                logger.debug(f"Using packaged default config from {self.default_config}")
+                # Using modern importlib.resources instead of pkg_resources
+                config_files = files('video_analyzer') / 'config' / 'default_config.json'
+                with config_files.open('r') as f:
+                    self._default_config_content = f.read()
+                logger.debug(f"Using packaged default config from video_analyzer.config")
             except Exception as e:
                 logger.error(f"Error finding default config: {e}")
                 raise
@@ -38,10 +47,14 @@ class Config:
                 logger.debug(f"Loading user config from {self.user_config}")
                 with open(self.user_config) as f:
                     self.config = json.load(f)
-            else:
-                logger.debug(f"No user config found, loading default config from {self.default_config}")
+            elif self.default_config.exists():
+                logger.debug(f"Loading default config from {self.default_config}")
                 with open(self.default_config) as f:
                     self.config = json.load(f)
+            else:
+                # Use packaged default config content
+                logger.debug(f"Loading packaged default config")
+                self.config = json.loads(self._default_config_content)
                     
             # Ensure prompts is a list
             if not isinstance(self.config.get("prompts", []), list):
@@ -76,14 +89,14 @@ class Config:
                     self.config["clients"][client]["model"] = value
                 elif key == "prompt":
                     self.config["prompt"] = value
-                #overide audio config
-                elif key == "whisper_model":
-                    self.config["audio"]["whisper_model"] = value  # default is 'medium'
+                #override audio config
+                elif key == "whisper_api_url":
+                    self.config["audio"]["whisper_api_url"] = value
+                elif key == "whisper_timeout":
+                    self.config["audio"]["timeout"] = value
                 elif key == "language":
                     if value is not None:
                         self.config["audio"]["language"] = value
-                elif key == "device":
-                    self.config["audio"]["device"] = value
                 elif key == "temperature":
                     self.config["clients"]["temperature"] = value
                 elif key not in ["start_stage", "max_frames"]:  # Ignore these as they're command-line only

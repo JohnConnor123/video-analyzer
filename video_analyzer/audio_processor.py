@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass
 import subprocess
-import torch
 from pydub import AudioSegment
+from .clients.whisper_client import WhisperClient
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,41 +19,37 @@ class AudioTranscript:
 class AudioProcessor:
     def __init__(self, 
                  language: str | None = None,
-                 model_size_or_path: str = "medium",
-                 device: str = "cpu"):
-        """Initialize audio processor with specified Whisper model size or model path. By default, the medium model is used."""
+                 whisper_api_url: str = "http://localhost:16000",
+                 timeout: int = 300):
+        """
+        Инициализация аудиопроцессора с HTTP-клиентом для Whisper API
+        
+        Args:
+            language: Код языка для транскрипции
+            whisper_api_url: URL Whisper API
+            timeout: Таймаут запросов в секундах
+        """
         try:
-            from faster_whisper import WhisperModel
-            
-            # Log cache directory
-            cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
-            logger.debug(f"Using HuggingFace cache directory: {cache_dir}")
-            
-            # Force CPU usage for now faster whisper having issues with cudas
-            self.device = device
-            compute_type = "float32"
-            logger.debug(f"Using device: {self.device}")
-
             self.language = language if language else None
 
-            self.model = WhisperModel(
-                model_size_or_path,
-                device=device,
-                compute_type=compute_type
+            # Инициализация HTTP-клиента для Whisper
+            self.whisper_client = WhisperClient(
+                api_url=whisper_api_url,
+                timeout=timeout
             )
-            logger.info(f"Initiation Input: Model size or path: {model_size_or_path}, Device: {device}, Compute type: {compute_type}, Language: {self.language if self.language else 'auto detected'}")
-            logger.debug(f"Successfully loaded Whisper model: {model_size_or_path}")
             
-            # Check for ffmpeg installation
+            logger.info(f"Инициализация AudioProcessor: Whisper API URL: {whisper_api_url}, Язык: {self.language if self.language else 'автоопределение'}")
+            
+            # Проверка наличия ffmpeg
             try:
                 subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
                 self.has_ffmpeg = True
             except (subprocess.CalledProcessError, FileNotFoundError):
                 self.has_ffmpeg = False
-                logger.warning("FFmpeg not found. Please install ffmpeg for better audio extraction.")
+                logger.warning("FFmpeg не найден. Установите ffmpeg для лучшего извлечения аудио.")
                 
         except Exception as e:
-            logger.error(f"Error loading Whisper model: {e}")
+            logger.error(f"Ошибка инициализации AudioProcessor: {e}")
             raise
 
     def extract_audio(self, video_path: Path, output_dir: Path) -> Optional[Path]:
@@ -104,54 +100,68 @@ class AudioProcessor:
                 )
 
     def transcribe(self, audio_path: Path) -> Optional[AudioTranscript]:
-        """Transcribe audio file using Whisper with quality checks."""
-        accepted_languages = {
-                "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh", "yue"
-        }
-        if self.language and self.language not in accepted_languages:
-            logger.warning(f"Invalid language code: {self.language}, will detect language automatically")
+        """Транскрипция аудио файла через Whisper API"""
         try:
-            # Initial transcription with VAD filtering
-            segments, info = self.model.transcribe(
-                str(audio_path),
-                beam_size=5,
-                word_timestamps=True,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
-                language = self.language if self.language in accepted_languages else None
+            # Отправка запроса к Whisper API
+            result = self.whisper_client.transcribe(
+                audio_path=audio_path,
+                language=self.language
             )
             
-            segments_list = list(segments)
-            if not segments_list:
-                logger.warning("No speech detected in audio")
+            if not result:
+                logger.warning("Не удалось получить результат транскрипции")
                 return None
             
-            # Convert segments to the expected format
-            segment_data = [
-                {
-                    "text": segment.text,
-                    "start": segment.start,
-                    "end": segment.end,
-                    "words": [
-                        {
-                            "word": word.word,
-                            "start": word.start,
-                            "end": word.end,
-                            "probability": word.probability
-                        }
-                        for word in (segment.words or [])
-                    ]
+            # Обработка ответа от API
+            text = result.get('text', '')
+            if not text or not text.strip():
+                logger.warning("Текст не обнаружен в аудио")
+                return None
+            
+            # Обработка сегментов, если они есть
+            segments = result.get('segments', [])
+            if not segments:
+                # Создаем базовый сегмент, если сегменты отсутствуют
+                segments = [{
+                    "text": text,
+                    "start": 0.0,
+                    "end": 0.0,
+                    "words": []
+                }]
+            
+            # Преобразование к ожидаемому формату
+            segment_data = []
+            for segment in segments:
+                segment_info = {
+                    "text": segment.get("text", ""),
+                    "start": segment.get("start", 0.0),
+                    "end": segment.get("end", 0.0),
+                    "words": []
                 }
-                for segment in segments_list
-            ]
+                
+                # Обработка слов, если они есть
+                if "words" in segment and segment["words"]:
+                    for word in segment["words"]:
+                        word_info = {
+                            "word": word.get("word", ""),
+                            "start": word.get("start", 0.0),
+                            "end": word.get("end", 0.0),
+                            "probability": word.get("probability", 1.0)
+                        }
+                        segment_info["words"].append(word_info)
+                
+                segment_data.append(segment_info)
+            
+            # Определение языка
+            detected_language = result.get('language', self.language or 'unknown')
             
             return AudioTranscript(
-                text=" ".join(segment.text for segment in segments_list),
+                text=text,
                 segments=segment_data,
-                language=info.language
+                language=detected_language
             )
             
         except Exception as e:
-            logger.error(f"Error transcribing audio: {e}")
+            logger.error(f"Ошибка транскрипции аудио: {e}")
             logger.exception(e)
             return None

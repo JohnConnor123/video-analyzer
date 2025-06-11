@@ -1,7 +1,13 @@
 from pathlib import Path
 import logging
 from typing import List, Dict
-import pkg_resources
+
+try:
+    # Python 3.9+
+    from importlib.resources import files
+except ImportError:
+    # Python 3.8
+    from importlib_resources import files
 
 logger = logging.getLogger(__name__)
 
@@ -10,16 +16,29 @@ class PromptLoader:
         # Handle user-provided prompt directory
         self.prompt_dir = Path(prompt_dir).expanduser() if prompt_dir else None
         self.prompts = prompts
+        self._package_prompt_content = None
 
     def _find_prompt_file(self, prompt_path: str) -> Path:
         """Find prompt file in package resources, package directory, or user directory."""
         # First try package resources (works for both install modes)
         try:
-            package_path = pkg_resources.resource_filename('video_analyzer', f'prompts/{prompt_path}')
-            if Path(package_path).exists():
-                return Path(package_path)
+            package_resource = files('video_analyzer') / 'prompts' / prompt_path
+            if package_resource.is_file():
+                # For Python 3.9+ we can convert to Path directly
+                # For older versions, we need to use a context manager
+                try:
+                    # Try to get the path directly (works in some cases)
+                    return Path(str(package_resource))
+                except (AttributeError, TypeError):
+                    # Fallback: create temporary file if needed
+                    with package_resource.open('r') as f:
+                        content = f.read()
+                    # Since we need to return a Path, let's save content and create temp path
+                    # But actually, let's modify the calling code to handle this better
+                    self._package_prompt_content = content
+                    return Path("__PACKAGE_RESOURCE__")  # Special marker
         except Exception as e:
-            logger.debug(f"Could not find package prompt via pkg_resources: {e}")
+            logger.debug(f"Could not find package prompt via importlib.resources: {e}")
 
         # Try package directory (for development mode)
         pkg_root = Path(__file__).parent
@@ -65,6 +84,11 @@ class PromptLoader:
             prompt = self.prompts[index]
             prompt_path = self._find_prompt_file(prompt["path"])
                 
+            # Check if this is package resource content
+            if str(prompt_path) == "__PACKAGE_RESOURCE__":
+                logger.debug(f"Loading prompt '{prompt['name']}' from package resources")
+                return self._package_prompt_content.strip()
+            else:
             logger.debug(f"Loading prompt '{prompt['name']}' from {prompt_path}")
             with open(prompt_path) as f:
                 return f.read().strip()
@@ -92,6 +116,11 @@ class PromptLoader:
             
             prompt_path = self._find_prompt_file(prompt["path"])
                 
+            # Check if this is package resource content
+            if str(prompt_path) == "__PACKAGE_RESOURCE__":
+                logger.debug(f"Loading prompt '{name}' from package resources")
+                return self._package_prompt_content.strip()
+            else:
             logger.debug(f"Loading prompt '{name}' from {prompt_path}")
             with open(prompt_path) as f:
                 return f.read().strip()

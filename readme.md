@@ -23,10 +23,10 @@ A video analysis tool that combines vision models like Llama's 11B vision model 
 - [Contributing](#contributing)
 
 ## Features
-- 💻 Can run completely locally - no cloud services or API keys needed
+- 💻 Can run completely locally with external Whisper API - no cloud services needed for vision processing
 - ☁️  Or, leverage any OpenAI API compatible LLM service (openrouter, openai, etc) for speed and scale
 - 🎬 Intelligent key frame extraction from videos
-- 🔊 High-quality audio transcription using OpenAI's Whisper
+- 🔊 High-quality audio transcription using external Whisper API service
 - 👁️ Frame analysis using Ollama and Llama3.2 11B Vision Model
 - 📝 Natural language descriptions of video content
 - 🔄 Automatic handling of poor quality audio
@@ -38,7 +38,7 @@ The system operates in three stages:
 
 1. Frame Extraction & Audio Processing
    - Uses OpenCV to extract key frames
-   - Processes audio using Whisper for transcription
+   - Processes audio using external Whisper API for transcription
    - Handles poor quality audio with confidence checks
 
 2. Frame Analysis
@@ -206,3 +206,16 @@ We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 - Review the project design
 - Propose changes through GitHub Discussions
 - Submit pull requests
+
+# Analysis with custom prompt and Whisper API
+video-analyzer video.mp4 \
+    --prompt "What activities are happening in this video?" \
+    --whisper-api-url http://localhost:16000
+
+# Cloud analysis with OpenRouter and custom Whisper API
+video-analyzer video.mp4 \
+    --client openai_api \
+    --api-key your-key \
+    --api-url https://openrouter.ai/api/v1 \
+    --model meta-llama/llama-3.2-11b-vision-instruct:free \
+    --whisper-api-url http://your-whisper-server:16000
